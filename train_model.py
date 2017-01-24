@@ -155,11 +155,85 @@ def build_model():
     model.add(MaxPooling2D(pool_size = (2, 2), strides = (2,2)))
     print("Layer 10: " + str(model.layers[-1].output_shape))
     
-    sgd = SGD(lr = 10r-4, decay = 5e-4, momentum = 0.9, nesterov = False)
+    sgd = SGD(lr = 10e-4, decay = 5e-4, momentum = 0.9, nesterov = False)
     
     model.compile(loss = fcrn_loss, optimizer = sgd, metrics = ['accuracy'])
     
   return model
         
-     
-    
+def batch(iterable, n = 1):
+  current_batch = []
+  from item in iterable:
+    current_batch .append(item)
+    if len(current_batch) == n:
+      yield current_batch
+      current_batch = []
+      
+def exemplar_generator(db_iters, batch_size):
+  while True:
+    for chunk in batch(itertools.chain.from_iterable(db_iters), batch_size):
+      X = []
+      Y = []
+      
+      for item in chunk:
+        X.append(item[:].reshape(1, img_rows, img_cols))
+        labels = np.array(item.attrs['label']).transpose(2, 0, 1)
+        Y.append(labels.reshape(7, delta, delta))
+        
+      yield (np.array(X), np.array(Y))
+      
+def load_db(db_filename):
+  try:
+    db = h5py.File(db_filename, 'r')
+    return db['data'].itervalues()
+  except:
+    print(sys.exc_info()[1])
+    return []
+  
+def load_exemplars(db_path):
+  dbs = map(lambda x: db_path + "/" + x, [f for f in os.listdir(db_path) if os.path.isfile(db_path + "/" + f)])
+  return exemplar_generator(map(lambda x: load_db(x), dbs), mini_batch_size)
+
+if __name__ == '__main__':
+  model_file = "bb-fcrn-model"
+  train_db_path = "/path/to/dbs"
+  validate_db_path = "/path/to/dbs"
+  
+  print("Loading data...")
+  
+  train = load_exemplars(train_db_path)
+  validate = load_exemplars(validate_db_path)
+  
+  print("Data loaded.")
+  print("Building model...")
+  
+  model = build_model()
+  
+  checkpoint = keras.callbacks.ModelCheckpoint(model_file + ".h5",
+                                               monitor = "acc",
+                                               verbose = 1,
+                                               save_best_only = True,
+                                               save_weights_only = False,
+                                               mode = 'auto')
+  
+  earlystopping = keras.callbacks.EarlyStopping(monitor = 'loss',
+                                                min_delta = 0,
+                                                patience = 5,
+                                                verbose = 1,
+                                                mode = 'auto')
+  
+  discount = DiscountCallback()
+  
+  csvlogger = keras.callbacks.CSVLogger(model_file + "-log.csv", append = True)
+  
+  model.fit_generator(train,
+                      samples_per_epoch = num_samples_per_epoch,
+                      nb_epoch = nb_epoch,
+                      verbose = 1,
+                      validation_data = validate,
+                      nb_val_samples = num_validation_samples,
+                      max_q_size = 10,
+                      pickle_safe = True,
+                      callbacks = [checkpoint, earlystopping, csvlogger, discount])
+                            
+                     
